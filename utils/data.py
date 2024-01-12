@@ -133,8 +133,8 @@ class CRD:
         ax1.set_xlabel('Minimum examples / Total examples')
         ax2.set_ylabel('Fraction of examples')
         return fig
-    
-    
+
+
     def plot_structure(self, i=0, rotation='0x,0y,0z'):
         pystruct = self.data.iloc[i].structure
         composition = [list(map(str, site.species._data.keys())) for site in pystruct.sites.copy()]
