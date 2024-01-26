@@ -168,10 +168,12 @@ class Network(torch.nn.Module):
             batch = data['batch']
         else:
             batch = data['pos'].new_zeros(data['pos'].shape[0], dtype=torch.long)
-
+        
         edge_src = data['edge_index'][0]  # edge source
         edge_dst = data['edge_index'][1]  # edge destination
-        edge_vec = data['edge_vec']
+        edge_batch = batch[edge_src]
+        edge_vec = (data['pos'][edge_dst] - data['pos'][edge_src]
+                    + torch.einsum('ni,nij->nj', data['edge_shift'], data['lattice'][edge_batch]))
 
         return batch, edge_src, edge_dst, edge_vec
     

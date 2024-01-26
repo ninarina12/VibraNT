@@ -11,7 +11,7 @@ import torch_geometric as tg
 
 from ase import Atom, Atoms
 from ase.io.jsonio import read_json
-from ase.data import covalent_radii
+from ase.data import atomic_masses, covalent_radii
 from ase.visualize.plot import plot_atoms
 from ase.neighborlist import neighbor_list, natural_cutoffs
 
@@ -41,10 +41,11 @@ class CRD:
         self.cmap_div = mpl.colors.LinearSegmentedColormap.from_list('cmap_div', [self.cmap(50), 'gray', self.cmap(150)])
         
         
-    def load_data(self, data_file):
+    def load_data(self, data_file, include_unknown=True):
         # load and parse data dictionary
         data_dict = read_json(data_file)
-        data = dict(zip(['mp_id', 'uid', 'structure', 'diel', 'dim'], [[], [], [], [], []]))
+        data = dict(zip(['mp_id', 'uid', 'structure', 'dim', 'diel', 'eigenvals', 'eigenvecs', 'raman', 'active'],
+                        [[], [], [], [], [], [], [], [], []]))
         
         for i, entry in tqdm(data_dict.items(), total=len(data_dict), bar_format=bar_format):
             if isinstance(i, int):                
@@ -68,6 +69,30 @@ class CRD:
                     valid = 0
                     
                 if valid:
+                    # Raman tensors
+                    activity = entry['data']['Ramanactive']
+                    raman = entry['data']['raman_tensors']
+                    
+                    if isinstance(raman, dict):
+                        # some Raman tensors are dictionaries indexed by active modes
+                        active = list(raman.keys())
+                        raman = np.stack(list(raman.values()))
+                       
+                    else:
+                        # Raman tensor lists are truncated if trailing inactive modes
+                        activity = activity[:len(raman)]
+                        
+                        if include_unknown:
+                            # include modes with unknown Raman activity
+                            active = [k for k in range(len(activity)) if (raman[k] != None) and (activity[k] >= 0)]
+                        else:
+                            active = [k for k in range(len(activity)) if (raman[k] != None) and (activity[k] > 0)]
+                        
+                        raman = [raman[k] for k in active]
+                        
+                        if len(raman):
+                            raman = np.stack(raman)
+                    
                     # identifiers
                     data['mp_id'].append(entry['key_value_pairs']['mpid'])
                     data['uid'].append(entry['unique_id'])
@@ -82,8 +107,20 @@ class CRD:
                     except:
                         data['dim'].append(-1)
                     else:
-                        data['dim'].append(int(dim))
+                        data['dim'].append(int(dim))  
+                        
+                    # eigenvalues
+                    freqs = entry['key_value_pairs']['frequencies_cm'].replace('[', '').replace(']','').split()
+                    data['eigenvals'].append([eval(k) for k in freqs])
                     
+                    # eigenvectors
+                    data['eigenvecs'].append(np.stack(entry['data']['eigenvec']))
+                    
+                    # Raman tensors
+                    data['raman'].append(raman)
+                    
+                    # Raman activity
+                    data['active'].append(active)
 
         self.data = pd.DataFrame.from_dict(data)
         self.data['formula'] = self.data['structure'].apply(lambda x: x.formula)
@@ -223,29 +260,28 @@ class Process:
         # edge_src and edge_dst are the indices of the central and neighboring atom, respectively
         # edge_shift indicates whether the neighbors are in different images or copies of the unit cell
         if scale:
-            cutoff = natural_cutoffs(struct, mult=scale) # uses covalent radii
+            # use covalent radii
+            cutoff = natural_cutoffs(struct, mult=scale)
         else:
             cutoff = r_max
         edge_src, edge_dst, edge_shift = neighbor_list("ijS", a=struct, cutoff=cutoff, self_interaction=True)
 
-        # compute the relative distances and unit cell shifts from periodic boundaries
-        edge_batch = positions.new_zeros(positions.shape[0], dtype=torch.long)[torch.from_numpy(edge_src)]
-        edge_vec = (positions[torch.from_numpy(edge_dst)]
-                    - positions[torch.from_numpy(edge_src)]
-                    + torch.einsum('ni,nij->nj', torch.tensor(edge_shift, dtype=self.default_dtype), lattice[edge_batch]))
-
         # compute node features and attributes
         x_node = torch.zeros((len(struct), self.Z_max))
         z_node = torch.zeros((len(struct), self.Z_max))
+        m_node = torch.zeros((len(struct),))
         for i, (comp, occ) in enumerate(zip(composition, occupancy)):
             for specie, k in zip(comp, occ):
                 x_node[i,:] += self.f_onehot[self.type_encoding[specie]]      # node feature
                 z_node[i,:] += k*self.type_onehot[self.type_encoding[specie]] # atom type (node attribute)
+                m_node[i] += k*atomic_masses[self.type_encoding[specie] + 1]
 
         data = tg.data.Data(
-            lattice=lattice, symbol=symbols, pos=positions, x=x_node, z=z_node,
-            y=self.tij.from_cartesian(torch.from_numpy(entry.diel), rtp=self.rtp).unsqueeze(0), edge_vec=edge_vec,
-            edge_index=torch.stack([torch.LongTensor(edge_src), torch.LongTensor(edge_dst)], dim=0),    
+            lattice=lattice, symbol=symbols, pos=positions, x=x_node, z=z_node, m=m_node,
+            y=self.tij.from_cartesian(torch.from_numpy(entry.diel), rtp=self.rtp).unsqueeze(0),
+            vec=torch.from_numpy(entry.eigenvecs).permute(1,0,2),
+            edge_shift=torch.tensor(edge_shift, dtype=self.default_dtype),
+            edge_index=torch.stack([torch.LongTensor(edge_src), torch.LongTensor(edge_dst)], dim=0),
         )
         return data
 
