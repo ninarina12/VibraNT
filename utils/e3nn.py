@@ -34,8 +34,8 @@ class Compose(torch.nn.Module):
         return x
     
 
-class Network(torch.nn.Module):
-    r"""equivariant neural network
+class E3NN(torch.nn.Module):
+    r"""E(3) equivariant neural network base class
     Parameters
     ----------
     irreps_in : `e3nn.o3.Irreps` or None
@@ -228,15 +228,15 @@ class Network(torch.nn.Module):
             return out
         
         
-    def visualize(self):
+    def visualize(self, i=0):
         layer_dst = dict(zip(['sc', 'lin1', 'tp', 'lin2'], ['gate', 'tp', 'lin2', 'gate']))
-        layers = self.layers + [self.outputs[0]]
+        layers = self.layers + [self.outputs[i]]
         
         num_layers = len(layers)
         num_ops = max([len([k for k in list(layers[i].first._modules.keys()) if k not in ['fc', 'alpha']])
                        for i in range(num_layers - 1)])
 
-        fig, ax = plt.subplots(num_layers, num_ops, figsize=(14,3.5*num_layers))
+        fig, ax = plt.subplots(num_layers, num_ops, figsize=(14, 3.5*num_layers))
         for i in range(num_layers - 1):
             ops = layers[i].first._modules.copy()
             j = 0
@@ -244,7 +244,7 @@ class Network(torch.nn.Module):
                 if (k != 'fc') and (k != 'alpha'):
                     ax[i,j].set_title(k)
                     v.visualize(ax=ax[i,j])
-                    ax[i,j].text(0.7,-0.15,'--> to ' + layer_dst[k], transform=ax[i,j].transAxes)
+                    ax[i,j].text(0.7, -0.15, '--> to ' + layer_dst[k], transform=ax[i,j].transAxes)
                     j += 1
 
         layer_dst = dict(zip(['sc', 'lin1', 'tp', 'lin2'], ['output', 'tp', 'lin2', 'output']))
@@ -254,7 +254,7 @@ class Network(torch.nn.Module):
             if (k != 'fc') and (k != 'alpha'):
                 ax[-1,j].set_title(k)
                 v.visualize(ax=ax[-1,j])
-                ax[-1,j].text(0.7,-0.15,'--> to ' + layer_dst[k], transform=ax[-1,j].transAxes)
+                ax[-1,j].text(0.7, -0.15, '--> to ' + layer_dst[k], transform=ax[-1,j].transAxes)
                 j += 1
         
         fig.subplots_adjust(wspace=0.3, hspace=0.5)
